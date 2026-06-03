@@ -10,3 +10,4 @@ pypdf
 python-multipart
 langchain-text-splitters
 python-dotenv
+docx2txt
