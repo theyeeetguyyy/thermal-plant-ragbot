@@ -5,7 +5,7 @@ build/
 dist/
 wheels/
 *.egg-info
-
+frontend-react/node_modules
 # Virtual environments
 .venv
 

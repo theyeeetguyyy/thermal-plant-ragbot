@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Upload, PlusCircle, User, Bot, LogOut, FileText, Lock } from 'lucide-react';
+import { Send, Upload, PlusCircle, User, Bot, LogOut, FileText, Lock, Trash2 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
@@ -20,7 +21,7 @@ function App() {
 
   // Load chats for user
   useEffect(() => {
-    if (user) {
+    if (user?.token) {
       const savedChats = localStorage.getItem(`chats_${user.token}`);
       if (savedChats) {
         const parsedChats = JSON.parse(savedChats);
@@ -34,19 +35,27 @@ function App() {
         createNewChat();
       }
     }
-  }, [user]);
+  }, [user?.token]);
 
   // Save chats
   useEffect(() => {
-    if (user && chats.length > 0) {
+    if (user?.token && chats.length > 0) {
       localStorage.setItem(`chats_${user.token}`, JSON.stringify(chats));
     }
-  }, [chats, user]);
+  }, [chats, user?.token]);
 
   const createNewChat = () => {
     const newId = Date.now().toString();
     setChats([{ id: newId, title: 'New Chat', messages: [] }, ...chats]);
     setCurrentChatId(newId);
+  };
+
+  const deleteChat = (id) => {
+    const newChats = chats.filter(c => c.id !== id);
+    setChats(newChats);
+    if (currentChatId === id) {
+      setCurrentChatId(newChats.length > 0 ? newChats[0].id : null);
+    }
   };
 
   const handleLogout = () => {
@@ -72,6 +81,7 @@ function App() {
             currentChatId={currentChatId} 
             onSelectChat={setCurrentChatId}
             onNewChat={createNewChat}
+            onDeleteChat={deleteChat}
             onLogout={handleLogout}
             onUpload={() => setIsUploading(true)}
             user={user}
@@ -160,7 +170,7 @@ function LoginScreen({ onLogin }) {
   );
 }
 
-function Sidebar({ chats, currentChatId, onSelectChat, onNewChat, onLogout, onUpload, user }) {
+function Sidebar({ chats, currentChatId, onSelectChat, onNewChat, onDeleteChat, onLogout, onUpload, user }) {
   return (
     <div className="sidebar">
       <div className="sidebar-header">
@@ -179,9 +189,19 @@ function Sidebar({ chats, currentChatId, onSelectChat, onNewChat, onLogout, onUp
             key={chat.id} 
             className={`history-item ${chat.id === currentChatId ? 'active' : ''}`}
             onClick={() => onSelectChat(chat.id)}
+            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
           >
-            <FileText size={16} />
-            {chat.title}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+              <FileText size={16} style={{ flexShrink: 0 }} />
+              <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{chat.title}</span>
+            </div>
+            <div 
+              onClick={(e) => { e.stopPropagation(); onDeleteChat(chat.id); }}
+              className="delete-btn"
+              title="Delete chat"
+            >
+              <Trash2 size={16} />
+            </div>
           </div>
         ))}
       </div>
@@ -189,7 +209,7 @@ function Sidebar({ chats, currentChatId, onSelectChat, onNewChat, onLogout, onUp
       <div className="sidebar-footer">
         {user.role === 'admin' && (
           <button className="action-btn" onClick={onUpload}>
-            <Upload size={16} /> Add Documents
+            <Upload size={16} /> Manage Documents
           </button>
         )}
         <button className="action-btn" onClick={onLogout} style={{color: '#ef4444', borderColor: '#fee2e2'}}>
@@ -242,6 +262,9 @@ function ChatArea({ chat, user, setUser, onUpdateChat, onLimitExceeded }) {
       if (!res.ok) {
         if (res.status === 402) {
           onLimitExceeded();
+          // Remove the user's message since it wasn't processed by backend
+          onUpdateChat({ ...chat, title, messages: chat.messages });
+          return;
         }
         throw new Error(data.detail || 'Failed to fetch response');
       }
@@ -298,8 +321,8 @@ function ChatArea({ chat, user, setUser, onUpdateChat, onLimitExceeded }) {
             <div className={`avatar ${msg.role}`}>
               {msg.role === 'user' ? <User size={20} /> : <Bot size={20} />}
             </div>
-            <div className="message-content">
-              <div dangerouslySetInnerHTML={{__html: msg.content.replace(/\n/g, '<br/>')}} />
+            <div className="message-content markdown-body">
+              <ReactMarkdown>{msg.content}</ReactMarkdown>
               {msg.sources && msg.sources.length > 0 && (
                 <div className="sources">
                   {msg.sources.map((s, idx) => (
@@ -345,15 +368,65 @@ function ChatArea({ chat, user, setUser, onUpdateChat, onLimitExceeded }) {
 function UploadModal({ onClose, user }) {
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  
+  const [documents, setDocuments] = useState([]);
+  const [loadingDocs, setLoadingDocs] = useState(true);
+
+  const fetchDocs = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/documents`, {
+        headers: { 'Authorization': `Bearer ${user.token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDocuments(data.documents);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingDocs(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDocs();
+  }, []);
+
+  const handleDelete = async (filename) => {
+    try {
+      const res = await fetch(`${API_URL}/api/documents/${filename}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${user.token}` }
+      });
+      if (res.ok) {
+        fetchDocs();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const handleUpload = async () => {
     if (!file) return;
     setUploading(true);
+    setProgress(0);
     setError('');
     setSuccess('');
     
+    // Fake progress bar
+    const interval = setInterval(() => {
+      setProgress(prev => {
+        if (prev >= 90) {
+          clearInterval(interval);
+          return 90;
+        }
+        return prev + 10;
+      });
+    }, 500);
+
     const formData = new FormData();
     formData.append('file', file);
 
@@ -369,10 +442,20 @@ function UploadModal({ onClose, user }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Upload failed');
       
+      clearInterval(interval);
+      setProgress(100);
       setSuccess(`Successfully uploaded and ingested: ${data.filename}`);
       setFile(null);
-      setTimeout(onClose, 2000);
+      fetchDocs();
+      
+      setTimeout(() => {
+        setSuccess('');
+        setProgress(0);
+      }, 3000);
+      
     } catch (err) {
+      clearInterval(interval);
+      setProgress(0);
       setError(err.message);
     } finally {
       setUploading(false);
@@ -381,19 +464,56 @@ function UploadModal({ onClose, user }) {
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content">
-        <h2 className="modal-title">Upload Document</h2>
-        <p style={{marginBottom: '16px', color: 'var(--text-muted)'}}>Upload a PDF or DOCX file to add it to the RAG knowledge base.</p>
-        <div className="form-group">
-          <input type="file" accept=".pdf,.docx" onChange={e => setFile(e.target.files[0])} />
+      <div className="modal-content" style={{maxWidth: '500px'}}>
+        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px'}}>
+          <h2 className="modal-title" style={{margin: 0}}>Manage Documents</h2>
+          <button className="action-btn" onClick={onClose} style={{margin: 0, padding: '4px 8px', width: 'auto'}}>Close</button>
         </div>
-        {error && <div className="error-text">{error}</div>}
-        {success && <div style={{color: '#16a34a', marginBottom: '16px', textAlign: 'center'}}>{success}</div>}
-        <div style={{display: 'flex', gap: '10px', marginTop: '20px'}}>
+        
+        <div style={{marginBottom: '24px'}}>
+          <h3 style={{fontSize: '1rem', marginBottom: '8px'}}>Upload New</h3>
+          <p style={{marginBottom: '16px', color: 'var(--text-muted)', fontSize: '0.875rem'}}>Upload a PDF or DOCX file to add it to the RAG knowledge base.</p>
+          <div className="form-group">
+            <input type="file" accept=".pdf,.docx" onChange={e => setFile(e.target.files[0])} disabled={uploading} />
+          </div>
+          
+          {uploading && (
+            <div className="progress-container">
+              <div className="progress-bar" style={{ width: `${progress}%` }}></div>
+            </div>
+          )}
+          
+          {error && <div className="error-text">{error}</div>}
+          {success && <div style={{color: '#16a34a', marginBottom: '16px', textAlign: 'center', fontSize: '0.875rem'}}>{success}</div>}
+          
           <button className="btn-primary" onClick={handleUpload} disabled={!file || uploading}>
             {uploading ? 'Processing...' : 'Upload & Ingest'}
           </button>
-          <button className="action-btn" onClick={onClose} style={{margin: 0, width: '100%'}}>Cancel</button>
+        </div>
+
+        <div style={{borderTop: '1px solid var(--border)', paddingTop: '24px'}}>
+          <h3 style={{fontSize: '1rem', marginBottom: '8px'}}>Existing Documents</h3>
+          {loadingDocs ? (
+            <p style={{color: 'var(--text-muted)', fontSize: '0.875rem'}}>Loading...</p>
+          ) : documents.length === 0 ? (
+            <p style={{color: 'var(--text-muted)', fontSize: '0.875rem'}}>No documents uploaded yet.</p>
+          ) : (
+            <div className="document-list">
+              {documents.map(doc => (
+                <div key={doc} className="document-item">
+                  <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '12px'}}>{doc}</span>
+                  <button 
+                    className="delete-btn" 
+                    onClick={() => handleDelete(doc)}
+                    style={{border: 'none', background: 'none', padding: '4px', margin: 0}}
+                    title="Delete document"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -25,8 +25,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-CHROMA_DB_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "chroma_db"))
-DATASET_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dataset"))
+PERSISTENT_DATA_MOUNT = "/data"
+
+if os.path.exists(PERSISTENT_DATA_MOUNT):
+    CHROMA_DB_DIR = os.path.join(PERSISTENT_DATA_MOUNT, "chroma_db")
+    DATASET_DIR = os.path.join(PERSISTENT_DATA_MOUNT, "dataset")
+    # If persistent db doesn't exist yet, copy the initial one from the repo
+    initial_chroma = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "chroma_db"))
+    initial_dataset = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dataset"))
+    if not os.path.exists(CHROMA_DB_DIR) and os.path.exists(initial_chroma):
+        shutil.copytree(initial_chroma, CHROMA_DB_DIR)
+    if not os.path.exists(DATASET_DIR) and os.path.exists(initial_dataset):
+        shutil.copytree(initial_dataset, DATASET_DIR)
+else:
+    CHROMA_DB_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "chroma_db"))
+    DATASET_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dataset"))
 
 @app.get("/")
 async def root():
@@ -39,7 +52,7 @@ llm = None
 embeddings = None
 
 # Query limits tracking
-DEMO_LIMIT = 3
+DEMO_LIMIT = 10
 demo_usage = {"demo1": 0}
 
 @app.on_event("startup")
@@ -208,3 +221,40 @@ async def upload_document(file: UploadFile = File(...), user: str = Depends(get_
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error ingesting file: {str(e)}")
+
+@app.get("/api/documents")
+async def list_documents(user: str = Depends(get_user)):
+    if user != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can view documents")
+    
+    if not os.path.exists(DATASET_DIR):
+        return {"documents": []}
+        
+    files = os.listdir(DATASET_DIR)
+    # Filter out non-files just in case
+    files = [f for f in files if os.path.isfile(os.path.join(DATASET_DIR, f))]
+    return {"documents": files}
+
+@app.delete("/api/documents/{filename}")
+async def delete_document(filename: str, user: str = Depends(get_user)):
+    if user != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can delete documents")
+        
+    file_path = os.path.join(DATASET_DIR, filename)
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        
+    global vectorstore
+    if vectorstore:
+        try:
+            # Delete from Chroma by metadata
+            vectorstore._collection.delete(where={"source_file": filename})
+            # Chroma._collection.delete doesn't require vectorstore.persist() in newer versions,
+            # but we can call it just in case if the method exists.
+            if hasattr(vectorstore, "persist"):
+                vectorstore.persist()
+        except Exception as e:
+            print(f"Error deleting from Chroma: {e}")
+            raise HTTPException(status_code=500, detail=f"Error removing from database: {str(e)}")
+            
+    return {"message": f"{filename} deleted successfully"}
