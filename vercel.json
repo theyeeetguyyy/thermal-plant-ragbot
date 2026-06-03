@@ -1,9 +1,10 @@
 {
   "cleanUrls": true,
+  "outputDirectory": "frontend-react/dist",
   "rewrites": [
     {
       "source": "/(.*)",
-      "destination": "/frontend-react/$1"
+      "destination": "/index.html"
     }
   ]
 }

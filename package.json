@@ -1,0 +1,7 @@
+{
+  "name": "thermal-rag-root",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "cd frontend-react && npm install && npm run build"
+  }
+}
