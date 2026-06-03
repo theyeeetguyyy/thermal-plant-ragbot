@@ -1,7 +1,7 @@
 // CONFIGURATION: Set your backend API URL here.
 // For local testing: 'http://127.0.0.1:8000/api/chat'
 // For Hugging Face Spaces: 'https://<your-username>-<your-space-name>.hf.space/api/chat'
-const API_URL = 'http://127.0.0.1:8000/api/chat';
+const API_URL = 'https://theyeetguy-thermal-rag.hf.space/api/chat';
 
 document.addEventListener('DOMContentLoaded', () => {
     const chatHistory = document.getElementById('chat-history');

@@ -24,6 +24,10 @@ app.add_middleware(
 
 CHROMA_DB_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "chroma_db"))
 
+@app.get("/")
+async def root():
+    return {"status": "healthy", "message": "Thermal Power Plant RAG API is running."}
+
 # Initialize Global Variables
 vectorstore = None
 retriever = None
