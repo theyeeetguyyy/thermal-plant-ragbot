@@ -2,11 +2,10 @@ fastapi
 uvicorn
 langchain
 langchain-community
-langchain-groq
-langchain-huggingface
-sentence-transformers
+langchain-openai
+openai
 chromadb
-pypdf
+pymupdf
 python-multipart
 langchain-text-splitters
 python-dotenv

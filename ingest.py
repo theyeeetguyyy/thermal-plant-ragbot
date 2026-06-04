@@ -1,77 +1,84 @@
-import os
+"""Batch (re)builder for the Chroma vector store.
+
+Runs the same dynamic pipeline used at upload time (PDF -> markdown, with a
+vision pass over charts/diagrams) over every PDF/DOCX under ``data/`` and
+writes the embeddings to ``chroma_db/``.
+
+Requires OPENAI_API_KEY in the environment (or a .env file). Seed documents
+are tagged with the DEFAULT administration code so they are visible to the
+default workspace.
+
+    python ingest.py
+"""
+
 import glob
+import os
+import shutil
+
 from dotenv import load_dotenv
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from chromadb.utils.embedding_functions import DefaultEmbeddingFunction as _ChromaEF
-from langchain_core.embeddings import Embeddings as _Embeddings
-
-
-class _LocalEmbeddings(_Embeddings):
-    def __init__(self):
-        self._ef = _ChromaEF()
-
-    def embed_documents(self, texts):
-        return [[float(x) for x in v] for v in self._ef(texts)]
-
-    def embed_query(self, text):
-        return [float(x) for x in self._ef([text])[0]]
 from langchain_community.vectorstores import Chroma
+from langchain_openai import OpenAIEmbeddings
+from openai import OpenAI
 
-# Resolve path to .env in the same directory as this script
-dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-load_dotenv(dotenv_path)
+from backend import ingestion
 
-# Directories to search
-DATASET_DIR = "dataset"
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
+DATASET_DIR = "data"
 CHROMA_DB_DIR = "chroma_db"
+IMAGES_ROOT = os.path.join(DATASET_DIR, "_images")
+DEFAULT_ADMIN_CODE = "DEFAULT"
+EMBED_MODEL = os.environ.get("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+
 
 def main():
-    print(f"Scanning {DATASET_DIR} for PDF files...")
-    # Find all PDFs in all subdirectories
-    pdf_files = glob.glob(os.path.join(DATASET_DIR, "**", "*.pdf"), recursive=True)
-    
-    if not pdf_files:
-        print("No PDF files found.")
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise SystemExit("OPENAI_API_KEY not set. Export it or add it to .env first.")
+
+    files = glob.glob(os.path.join(DATASET_DIR, "**", "*.pdf"), recursive=True)
+    files += glob.glob(os.path.join(DATASET_DIR, "**", "*.docx"), recursive=True)
+    files = [f for f in files if os.sep + "_images" + os.sep not in f]
+    if not files:
+        print(f"No PDF/DOCX files found under {DATASET_DIR}/.")
         return
 
-    print(f"Found {len(pdf_files)} PDF files. Beginning processing...")
+    print(f"Found {len(files)} file(s). Beginning processing...")
+    client = OpenAI(api_key=api_key)
 
-    documents = []
-    for pdf_file in pdf_files:
-        print(f"Loading {pdf_file}...")
+    all_chunks = []
+    for path in files:
+        source_file = os.path.basename(path)
+        print(f"Processing {source_file} ...")
         try:
-            loader = PyPDFLoader(pdf_file)
-            docs = loader.load()
-            for doc in docs:
-                # Store the filename in metadata
-                doc.metadata['source_file'] = os.path.basename(pdf_file)
-            documents.extend(docs)
-        except Exception as e:
-            print(f"Error loading {pdf_file}: {e}")
+            chunks, stats = ingestion.ingest_file(
+                path, source_file, images_root=IMAGES_ROOT, client=client
+            )
+            for ch in chunks:
+                ch.metadata["admin_code"] = DEFAULT_ADMIN_CODE
+            print(f"  -> {len(chunks)} chunks  {stats}")
+            all_chunks.extend(chunks)
+        except Exception as exc:
+            print(f"  !! failed: {exc}")
 
-    print(f"Loaded {len(documents)} pages. Splitting text...")
-    
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-        length_function=len
-    )
-    chunks = text_splitter.split_documents(documents)
-    
-    print(f"Created {len(chunks)} text chunks. Generating local embeddings and storing in ChromaDB...")
+    if not all_chunks:
+        print("No chunks produced; nothing to write.")
+        return
 
-    # Using free, local HuggingFace embeddings (no API key needed!)
-    embeddings = _LocalEmbeddings()
-    
-    # Create and persist the vector store
+    # Start from a clean store: old vectors may use a different embedding
+    # dimension (e.g. the legacy local model), which Chroma cannot mix.
+    if os.path.exists(CHROMA_DB_DIR):
+        print(f"Removing existing {CHROMA_DB_DIR}/ for a clean rebuild...")
+        shutil.rmtree(CHROMA_DB_DIR)
+
+    print(f"Embedding {len(all_chunks)} chunks with {EMBED_MODEL} and writing to {CHROMA_DB_DIR}/ ...")
+    embeddings = OpenAIEmbeddings(model=EMBED_MODEL, api_key=api_key)
     vectorstore = Chroma.from_documents(
-        documents=chunks, 
-        embedding=embeddings, 
-        persist_directory=CHROMA_DB_DIR
+        documents=all_chunks, embedding=embeddings, persist_directory=CHROMA_DB_DIR
     )
     vectorstore.persist()
     print("Ingestion complete. Vector store saved to disk.")
+
 
 if __name__ == "__main__":
     main()
