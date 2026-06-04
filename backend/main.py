@@ -636,10 +636,11 @@ async def chat(request: ChatRequest, user: dict[str, Any] = Depends(get_user)):
                 # User pinned a specific document — search only within it, no score cutoff
                 is_summary = any(w in request.query.lower() for w in ("summarize", "summary", "overview", "what is", "describe", "explain"))
                 k = 20 if is_summary else 12
-                chroma_filter = {"$and": [{"admin_code": admin_code}, {"source_file": source_file}]}
+                # Use explicit $eq inside $and — ChromaDB requires this form for compound filters
+                chroma_filter = {"$and": [{"admin_code": {"$eq": admin_code}}, {"source_file": {"$eq": source_file}}]}
             else:
                 k = 8
-                chroma_filter = {"admin_code": admin_code}
+                chroma_filter = {"admin_code": {"$eq": admin_code}}
             try:
                 raw_docs = vectorstore.similarity_search(request.query, k=k, filter=chroma_filter)
             except Exception as e:
@@ -855,7 +856,7 @@ async def delete_document(filename: str, user: dict[str, Any] = Depends(get_user
     if vectorstore:
         try:
             # Scope the vector deletion to this administration's copy of the file.
-            vectorstore._collection.delete(where={"$and": [{"admin_code": admin_code}, {"source_file": filename}]})
+            vectorstore._collection.delete(where={"$and": [{"admin_code": {"$eq": admin_code}}, {"source_file": {"$eq": filename}}]})
             if hasattr(vectorstore, "persist"):
                 vectorstore.persist()
         except Exception as e:
