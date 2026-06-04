@@ -632,14 +632,14 @@ async def chat(request: ChatRequest, user: dict[str, Any] = Depends(get_user)):
 
         if vectorstore:
             # Every search is confined to the active administration's chunks.
+            is_summary = any(w in request.query.lower() for w in ("summarize", "summarise", "summar", "summary", "overview", "what is", "describe", "explain"))
             if source_file:
                 # User pinned a specific document — search only within it, no score cutoff
-                is_summary = any(w in request.query.lower() for w in ("summarize", "summary", "overview", "what is", "describe", "explain"))
                 k = 20 if is_summary else 12
                 # Use explicit $eq inside $and — ChromaDB requires this form for compound filters
                 chroma_filter = {"$and": [{"admin_code": {"$eq": admin_code}}, {"source_file": {"$eq": source_file}}]}
             else:
-                k = 8
+                k = 20 if is_summary else 8
                 chroma_filter = {"admin_code": {"$eq": admin_code}}
             try:
                 raw_docs = vectorstore.similarity_search(request.query, k=k, filter=chroma_filter)
@@ -666,9 +666,10 @@ async def chat(request: ChatRequest, user: dict[str, Any] = Depends(get_user)):
         scoped_note = (
             f"## Active document scope\n"
             f"The user has selected **{source_file}** as the active document for this session. "
-            f"Base your answer primarily on content from this document. "
-            f"If asked to summarise, provide a comprehensive summary of the retrieved chunks below.\n\n"
+            f"Base your answer primarily on content from this document.\n\n"
         ) if source_file else ""
+
+        summary_note = "If asked to summarise, provide a comprehensive summary of the retrieved chunks below.\n\n"
 
         no_context_msg = (
             f"The document **{source_file}** was selected but no matching content could be retrieved for this query. "
@@ -687,7 +688,7 @@ async def chat(request: ChatRequest, user: dict[str, Any] = Depends(get_user)):
             f"3. If the answer is not in the retrieved context, say exactly: \"{no_context_msg}\"\n"
             "4. Never invent facts, procedures, values, or specifications.\n\n"
 
-            + scoped_note +
+            + scoped_note + summary_note +
 
             """## HOW TO ANSWER — fit the format to the question, do not force it
 - Lead with a direct answer to what was asked, in the first sentence.
