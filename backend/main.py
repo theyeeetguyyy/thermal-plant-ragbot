@@ -44,7 +44,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-PERSISTENT_DATA_MOUNT = "/data"
+PERSISTENT_DATA_MOUNT = "/data/v2"
+if os.path.exists("/data"):
+    os.makedirs(PERSISTENT_DATA_MOUNT, exist_ok=True)
 DEMO_LIMIT = int(os.environ.get("DEMO_LIMIT", "10"))
 DEMO_UPLOAD_LIMIT = int(os.environ.get("DEMO_UPLOAD_LIMIT", "10"))
 CHAT_MEMORY_MESSAGES = int(os.environ.get("CHAT_MEMORY_MESSAGES", "8"))
@@ -430,14 +432,20 @@ async def startup_event():
         llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, api_key=api_key, temperature=0)
 
         if os.path.exists(CHROMA_DB_DIR):
-            vectorstore = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings)
-            retriever = vectorstore.as_retriever(
-                search_type="similarity",
-                search_kwargs={"k": 8},
-            )
-            print("RAG pipeline initialized successfully.")
+            try:
+                vectorstore = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings)
+                retriever = vectorstore.as_retriever(
+                    search_type="similarity",
+                    search_kwargs={"k": 8},
+                )
+                print("RAG pipeline initialized successfully.")
+            except Exception as chroma_err:
+                print(f"ChromaDB load failed ({chroma_err}). Wiping stale DB and starting fresh.")
+                shutil.rmtree(CHROMA_DB_DIR, ignore_errors=True)
+                vectorstore = None
+                retriever = None
         else:
-            print("WARNING: Chroma DB directory not found. Run ingest.py first or upload a document.")
+            print("WARNING: Chroma DB directory not found. Upload a document to initialize.")
     except Exception as e:
         print(f"Error during startup: {e}")
 
