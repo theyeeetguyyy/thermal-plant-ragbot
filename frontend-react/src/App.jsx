@@ -122,7 +122,14 @@ function App() {
 
   useEffect(() => {
     const saved = localStorage.getItem('user');
-    if (saved) setUser(JSON.parse(saved));
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.username) {
+        setUser(parsed);
+      } else {
+        localStorage.removeItem('user');
+      }
+    }
   }, []);
 
   useEffect(() => {
