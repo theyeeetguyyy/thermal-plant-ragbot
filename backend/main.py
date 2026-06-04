@@ -579,8 +579,8 @@ async def chat(request: ChatRequest, user: dict[str, Any] = Depends(get_user)):
     role = user["role"]
     admin_code = user["admin_code"]
 
-    if not retriever or not llm:
-        raise HTTPException(status_code=500, detail="RAG pipeline not initialized. Check DB and API key settings.")
+    if not llm:
+        raise HTTPException(status_code=500, detail="LLM not initialized. Check OPENAI_API_KEY setting.")
 
     if role == "demo":
         usage = await db.usage.find_one({"username": username}) or {"queries_used": 0}
