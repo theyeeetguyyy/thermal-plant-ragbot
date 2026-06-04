@@ -5,11 +5,17 @@ import {
   BarChart3,
   Bell,
   Bot,
+  Building2,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
   Database,
+  Palette,
+  Plus,
+  UserPlus,
+  Users,
   ExternalLink,
   FileText,
   Globe,
@@ -38,6 +44,41 @@ import ReactMarkdown from 'react-markdown';
 import logoImg from '../../ID_logo.webp';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
+/* ── Theming ─────────────────────────────────────────────────
+   Palettes are defined in the DB (db.themes) and fetched at runtime.
+   Each palette key maps onto a CSS custom property the app reads from. */
+const THEME_VAR_MAP = {
+  primary: '--primary',
+  primary_dark: '--primary-dark',
+  primary_container: '--primary-container',
+  primary_subtle: '--primary-subtle',
+  primary_fixed: '--primary-fixed',
+  primary_fixed_dim: '--primary-fixed-dim',
+  secondary: '--secondary',
+  secondary_container: '--secondary-container',
+  sb_active_bg: '--sb-active-bg',
+  sb_active_text: '--sb-active-text',
+};
+
+function applyThemePalette(palette) {
+  if (!palette) return;
+  const root = document.documentElement;
+  for (const [k, cssVar] of Object.entries(THEME_VAR_MAP)) {
+    if (palette[k]) root.style.setProperty(cssVar, palette[k]);
+  }
+}
+
+/* Apply a theme by key, using a {key: palette} map. Returns true if applied. */
+function applyThemeByKey(themesMap, key) {
+  const palette = themesMap?.[key]?.palette || themesMap?.[key];
+  if (palette) { applyThemePalette(palette); return true; }
+  return false;
+}
+
+function adminLogoUrl(code) {
+  return `${API_URL}/api/administrations/${encodeURIComponent(code)}/logo`;
+}
 
 /* ── Duck SVG mark ───────────────────────────────────────── */
 function DuckIcon({ size = 24, className = '' }) {
@@ -119,13 +160,23 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [documents, setDocuments]     = useState([]);
   const [kbFilter, setKbFilter]       = useState('All Documents');
+  const [themes, setThemes]           = useState(() => {
+    try { return JSON.parse(localStorage.getItem('dr_themes') || '{}'); } catch { return {}; }
+  });
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [switchingAdmin, setSwitchingAdmin] = useState(false);
 
+  /* Restore session + immediately apply the last-used theme (no flash). */
   useEffect(() => {
     const saved = localStorage.getItem('user');
     if (saved) {
       const parsed = JSON.parse(saved);
       if (parsed.username) {
         setUser(parsed);
+        try {
+          const cached = JSON.parse(localStorage.getItem('dr_themes') || '{}');
+          if (parsed.theme) applyThemeByKey(cached, parsed.theme);
+        } catch {}
       } else {
         localStorage.removeItem('user');
       }
@@ -136,7 +187,65 @@ function App() {
     if (!user?.token) return;
     loadChats();
     loadDocuments();
+    loadThemes();
   }, [user?.token]);
+
+  /* Apply the active administration's theme whenever it or the palettes change. */
+  useEffect(() => {
+    if (user?.theme && Object.keys(themes).length) applyThemeByKey(themes, user.theme);
+  }, [user?.theme, themes]);
+
+  const loadThemes = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/themes`, { headers: authHeaders(user) });
+      const d = await r.json();
+      if (r.ok && d.themes) {
+        const map = Object.fromEntries(d.themes.map(t => [t.key, t]));
+        setThemes(map);
+        localStorage.setItem('dr_themes', JSON.stringify(map));
+        if (user?.theme) applyThemeByKey(map, user.theme);
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  /* Switch the active administration: persists server-side, re-themes,
+     and reloads the (now isolated) chats + documents. */
+  const switchAdmin = async (code) => {
+    if (!code || code === user?.active_admin || switchingAdmin) return;
+    setSwitchingAdmin(true);
+    try {
+      const r = await fetch(`${API_URL}/api/me/active-admin`, {
+        method: 'POST',
+        headers: { ...authHeaders(user), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'Switch failed');
+      const u2 = { ...user, active_admin: d.active_admin, theme: d.theme, administrations: d.administrations };
+      setUser(u2);
+      localStorage.setItem('user', JSON.stringify(u2));
+      applyThemeByKey(themes, d.theme);
+      setCurrentId(null);
+      setActiveChat(null);
+      await Promise.all([loadChats(), loadDocuments()]);
+    } catch (e) { console.error(e); }
+    finally { setSwitchingAdmin(false); }
+  };
+
+  /* After admin edits administrations, refresh the user's switcher context. */
+  const refreshAdminContext = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/me/administrations`, { headers: authHeaders(user) });
+      const d = await r.json();
+      if (r.ok) {
+        const u2 = { ...user, administrations: d.administrations, active_admin: d.active_admin, theme: d.theme };
+        setUser(u2);
+        localStorage.setItem('user', JSON.stringify(u2));
+        applyThemeByKey(themes, d.theme);
+      }
+    } catch (e) { console.error(e); }
+    await loadThemes();
+  };
 
   useEffect(() => {
     if (!user?.token || !currentChatId) { setActiveChat(null); return; }
@@ -245,6 +354,9 @@ function App() {
               onLimitExceeded={() => setShowUpgrade(true)}
               onOpenKb={openKb}
               onOpenCommunity={() => setActivePage('community')}
+              onSwitchAdmin={switchAdmin}
+              switchingAdmin={switchingAdmin}
+              onOpenAdminPanel={() => setShowAdminPanel(true)}
             />
           )}
           {isUploading && (
@@ -252,6 +364,13 @@ function App() {
           )}
           {showUpgrade && <UpgradeModal onClose={() => setShowUpgrade(false)} />}
           {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+          {showAdminPanel && (
+            <AdminPanel
+              user={user}
+              themes={themes}
+              onClose={() => { setShowAdminPanel(false); refreshAdminContext(); }}
+            />
+          )}
         </>
       )}
     </div>
@@ -454,7 +573,7 @@ function ChatArea({
   chat, user, loadingChat, documents, chatCount,
   sidebarOpen, onOpenSidebar, onToggleSidebar, setUser,
   onLocalUpdate, onRefreshChats, onPatchChat, onCreateChat, onLimitExceeded,
-  onOpenKb, onOpenCommunity,
+  onOpenKb, onOpenCommunity, onSwitchAdmin, switchingAdmin, onOpenAdminPanel,
 }) {
   const [input, setInput]           = useState('');
   const [sending, setSending]       = useState(false);
@@ -635,6 +754,12 @@ function ChatArea({
         </nav>
 
         <div className="header-actions">
+          <AdminSwitcher
+            user={user}
+            switching={switchingAdmin}
+            onSwitch={onSwitchAdmin}
+            onManage={user.role === 'admin' ? onOpenAdminPanel : null}
+          />
           <div className="user-avatar" title={user.username}>
             {user.username[0].toUpperCase()}
           </div>
@@ -1197,6 +1322,297 @@ function HelpModal({ onClose }) {
           </div>
         </div>
       </section>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════
+   Administration switcher (header) + logo with fallback
+   ════════════════════════════════════════════════════════════ */
+
+function AdminLogo({ code, hasLogo, size = 18 }) {
+  const [broken, setBroken] = useState(false);
+  if (!hasLogo || broken) {
+    return <Building2 size={size} />;
+  }
+  return (
+    <img
+      src={adminLogoUrl(code)}
+      alt=""
+      style={{ width: size, height: size, objectFit: 'contain', borderRadius: 4 }}
+      onError={() => setBroken(true)}
+    />
+  );
+}
+
+function AdminSwitcher({ user, switching, onSwitch, onManage }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const admins = user.administrations || [];
+  const active = admins.find(a => a.code === user.active_admin) || admins[0] || null;
+
+  useEffect(() => {
+    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, []);
+
+  // Nothing to switch between and not an admin → just show the badge.
+  const interactive = admins.length > 1 || !!onManage;
+
+  return (
+    <div className="admin-switcher" ref={ref}>
+      <button
+        type="button"
+        className="admin-switcher-btn"
+        onClick={() => interactive && setOpen(v => !v)}
+        title={active ? active.name : 'Administration'}
+      >
+        {switching ? <Loader2 size={15} className="spin" /> : <AdminLogo code={active?.code} hasLogo={active?.has_logo} />}
+        <span className="admin-switcher-name">{active ? active.name : 'No administration'}</span>
+        {interactive && <ChevronDown size={13} className={open ? 'rot' : ''} />}
+      </button>
+      {open && (
+        <div className="admin-switcher-menu">
+          <div className="admin-switcher-label">Switch administration</div>
+          {admins.map(a => (
+            <button
+              key={a.code}
+              type="button"
+              className={`admin-switcher-item${a.code === user.active_admin ? ' active' : ''}`}
+              onClick={() => { setOpen(false); onSwitch(a.code); }}
+            >
+              <AdminLogo code={a.code} hasLogo={a.has_logo} size={16} />
+              <span className="asi-name">{a.name}</span>
+              <span className="asi-code">{a.code}</span>
+              {a.code === user.active_admin && <Check size={13} className="asi-check" />}
+            </button>
+          ))}
+          {onManage && (
+            <>
+              <div className="admin-switcher-sep" />
+              <button type="button" className="admin-switcher-item manage" onClick={() => { setOpen(false); onManage(); }}>
+                <Settings size={15} />
+                <span className="asi-name">Manage administrations</span>
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════
+   Admin Panel — create administrations, themes, logos, members
+   ════════════════════════════════════════════════════════════ */
+
+function AdminPanel({ user, themes, onClose }) {
+  const [admins, setAdmins]   = useState([]);
+  const [users, setUsers]     = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState('');
+  const [busy, setBusy]       = useState(false);
+
+  const themeKeys = Object.keys(themes || {});
+  const [form, setForm] = useState({ code: '', name: '', theme: themeKeys[0] || 'blue' });
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [ra, ru] = await Promise.all([
+        fetch(`${API_URL}/api/administrations`, { headers: authHeaders(user) }),
+        fetch(`${API_URL}/api/admin/users`, { headers: authHeaders(user) }),
+      ]);
+      const [da, du] = await Promise.all([ra.json(), ru.json()]);
+      if (ra.ok) setAdmins(da.administrations || []);
+      if (ru.ok) setUsers(du.users || []);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const createAdmin = async (e) => {
+    e.preventDefault();
+    setError(''); setBusy(true);
+    try {
+      const r = await fetch(`${API_URL}/api/administrations`, {
+        method: 'POST',
+        headers: { ...authHeaders(user), 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'Create failed');
+      setForm({ code: '', name: '', theme: themeKeys[0] || 'blue' });
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+
+  const updateTheme = async (code, theme) => {
+    await fetch(`${API_URL}/api/administrations/${encodeURIComponent(code)}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(user), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ theme }),
+    });
+    await load();
+  };
+
+  const uploadLogo = async (code, file) => {
+    if (!file) return;
+    const fd = new FormData(); fd.append('file', file);
+    await fetch(`${API_URL}/api/administrations/${encodeURIComponent(code)}/logo`, {
+      method: 'POST', headers: authHeaders(user), body: fd,
+    });
+    await load();
+  };
+
+  const deleteAdmin = async (code) => {
+    if (!window.confirm(`Delete administration "${code}"? Its members will be unassigned.`)) return;
+    const r = await fetch(`${API_URL}/api/administrations/${encodeURIComponent(code)}`, {
+      method: 'DELETE', headers: authHeaders(user),
+    });
+    if (!r.ok) { const d = await r.json(); setError(d.detail || 'Delete failed'); return; }
+    await load();
+  };
+
+  const addMember = async (code, username) => {
+    if (!username) return;
+    await fetch(`${API_URL}/api/administrations/${encodeURIComponent(code)}/members`, {
+      method: 'POST',
+      headers: { ...authHeaders(user), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username }),
+    });
+    await load();
+  };
+
+  const removeMember = async (code, username) => {
+    await fetch(`${API_URL}/api/administrations/${encodeURIComponent(code)}/members/${encodeURIComponent(username)}`, {
+      method: 'DELETE', headers: authHeaders(user),
+    });
+    await load();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <section className="modal-card admin-panel" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <h2>Administrations</h2>
+            <p>Create workspaces (key → name), set theme & logo, and assign users. Each administration has isolated chats and documents.</p>
+          </div>
+          <button className="btn-icon" onClick={onClose}><X size={15} /></button>
+        </div>
+
+        {/* Create form */}
+        <form className="admin-create-row" onSubmit={createAdmin}>
+          <input
+            className="admin-input code"
+            placeholder="Key (e.g. 001)"
+            value={form.code}
+            onChange={e => setForm(f => ({ ...f, code: e.target.value }))}
+            required
+          />
+          <input
+            className="admin-input name"
+            placeholder="Name (e.g. M.P Power Jabalpur)"
+            value={form.name}
+            onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+            required
+          />
+          <select className="admin-input theme" value={form.theme} onChange={e => setForm(f => ({ ...f, theme: e.target.value }))}>
+            {themeKeys.map(k => <option key={k} value={k}>{themes[k].name || k}</option>)}
+          </select>
+          <button className="btn-primary compact" disabled={busy}>
+            {busy ? <Loader2 size={14} className="spin" /> : <Plus size={14} />} Create
+          </button>
+        </form>
+        {error && <div className="msg-err">{error}</div>}
+
+        {/* List */}
+        <div className="admin-list">
+          {loading ? (
+            <div className="center-row"><Loader2 className="spin" size={15} /> Loading…</div>
+          ) : admins.length === 0 ? (
+            <div className="center-row">No administrations yet</div>
+          ) : admins.map(a => (
+            <AdminPanelRow
+              key={a.code}
+              admin={a}
+              users={users}
+              themes={themes}
+              onTheme={updateTheme}
+              onLogo={uploadLogo}
+              onDelete={deleteAdmin}
+              onAddMember={addMember}
+              onRemoveMember={removeMember}
+            />
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AdminPanelRow({ admin, users, themes, onTheme, onLogo, onDelete, onAddMember, onRemoveMember }) {
+  const logoRef = useRef(null);
+  const [pick, setPick] = useState('');
+  const themeKeys = Object.keys(themes || {});
+  const members = admin.members || [];
+  const assignable = users.filter(u => !members.includes(u.username));
+
+  return (
+    <div className="admin-row">
+      <div className="admin-row-head">
+        <div className="admin-row-id">
+          <AdminLogo code={admin.code} hasLogo={admin.has_logo} size={22} />
+          <div>
+            <div className="admin-row-name">{admin.name}</div>
+            <div className="admin-row-code">Key: {admin.code}</div>
+          </div>
+        </div>
+        <div className="admin-row-tools">
+          <label className="admin-tool" title="Theme">
+            <Palette size={13} />
+            <select value={admin.theme} onChange={e => onTheme(admin.code, e.target.value)}>
+              {themeKeys.map(k => <option key={k} value={k}>{themes[k].name || k}</option>)}
+            </select>
+          </label>
+          <button className="admin-tool btn" onClick={() => logoRef.current?.click()}>
+            <Upload size={13} /> Logo
+          </button>
+          <input ref={logoRef} type="file" accept="image/*" style={{ display: 'none' }}
+                 onChange={e => { onLogo(admin.code, e.target.files[0]); e.target.value = ''; }} />
+          {admin.code !== 'DEFAULT' && (
+            <button className="admin-tool btn danger" onClick={() => onDelete(admin.code)}>
+              <Trash2 size={13} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="admin-members">
+        <div className="admin-members-label"><Users size={12} /> Members</div>
+        <div className="admin-member-chips">
+          {members.length === 0 && <span className="admin-member-empty">No users assigned</span>}
+          {members.map(m => (
+            <span key={m} className="admin-member-chip">
+              {m}
+              <button onClick={() => onRemoveMember(admin.code, m)} title="Remove"><X size={10} /></button>
+            </span>
+          ))}
+        </div>
+        <div className="admin-add-member">
+          <select value={pick} onChange={e => setPick(e.target.value)}>
+            <option value="">Add user…</option>
+            {assignable.map(u => <option key={u.username} value={u.username}>{u.username}{u.role === 'admin' ? ' (admin)' : ''}</option>)}
+          </select>
+          <button className="btn-primary compact" disabled={!pick} onClick={() => { onAddMember(admin.code, pick); setPick(''); }}>
+            <UserPlus size={13} /> Add
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
