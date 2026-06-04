@@ -2128,6 +2128,10 @@ a { color: inherit; text-decoration: none; }
   .login-brand { display: none; }
   .login-form-panel { width: 100%; }
   .login-mobile-logo { display: flex; }
+
+  /* Responsive header navbar */
+  .header-nav-btn span { display: none; }
+  .header-nav-btn { padding: 0 8px; }
 }
 
 @media (max-width: 600px) {
