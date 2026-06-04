@@ -58,18 +58,30 @@ DEMO_LIMIT = int(os.environ.get("DEMO_LIMIT", "10"))
 DEMO_UPLOAD_LIMIT = int(os.environ.get("DEMO_UPLOAD_LIMIT", "10"))
 CHAT_MEMORY_MESSAGES = int(os.environ.get("CHAT_MEMORY_MESSAGES", "8"))
 
+CHROMA_DB_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "chroma_db"))
+
 if os.path.exists(PERSISTENT_DATA_MOUNT):
-    CHROMA_DB_DIR = os.path.join(PERSISTENT_DATA_MOUNT, "chroma_db")
     DATASET_DIR = os.path.join(PERSISTENT_DATA_MOUNT, "dataset")
-    initial_chroma = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "chroma_db"))
     initial_dataset = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
-    if not os.path.exists(CHROMA_DB_DIR) and os.path.exists(initial_chroma):
-        shutil.copytree(initial_chroma, CHROMA_DB_DIR)
     if not os.path.exists(DATASET_DIR) and os.path.exists(initial_dataset):
         shutil.copytree(initial_dataset, DATASET_DIR)
 else:
-    CHROMA_DB_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "chroma_db"))
     DATASET_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+
+def backup_chroma():
+    if os.path.exists(PERSISTENT_DATA_MOUNT):
+        shutil.make_archive(os.path.join(PERSISTENT_DATA_MOUNT, "chroma_backup"), 'zip', CHROMA_DB_DIR)
+
+def restore_chroma():
+    if os.path.exists(PERSISTENT_DATA_MOUNT):
+        backup_zip = os.path.join(PERSISTENT_DATA_MOUNT, "chroma_backup.zip")
+        if os.path.exists(backup_zip):
+            if os.path.exists(CHROMA_DB_DIR):
+                shutil.rmtree(CHROMA_DB_DIR)
+            shutil.unpack_archive(backup_zip, CHROMA_DB_DIR)
+        else:
+            if os.path.exists(CHROMA_DB_DIR):
+                backup_chroma()
 
 mongo_client: AsyncIOMotorClient | None = None
 db = None
@@ -200,6 +212,7 @@ async def get_user(authorization: str = Header(None)) -> dict[str, Any]:
 @app.on_event("startup")
 async def startup_event():
     global mongo_client, db, vectorstore, retriever, llm, embeddings
+    restore_chroma()
 
     mongo_uri = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
     mongo_db_name = os.environ.get("MONGODB_DB", "thermal_plant_ragbot")
@@ -566,6 +579,8 @@ async def upload_document(file: UploadFile = File(...), user: dict[str, Any] = D
         else:
             vectorstore.add_documents(chunks)
             vectorstore.persist()
+            
+        backup_chroma()
 
         await db.documents.update_one(
             {"filename": file.filename},
@@ -634,6 +649,8 @@ async def delete_document(filename: str, user: dict[str, Any] = Depends(get_user
         except Exception as e:
             print(f"Error deleting from Chroma: {e}")
             raise HTTPException(status_code=500, detail=f"Error removing from vector database: {str(e)}")
+            
+        backup_chroma()
 
     await db.documents.delete_one({"filename": filename})
     return {"message": f"{filename} deleted successfully"}
