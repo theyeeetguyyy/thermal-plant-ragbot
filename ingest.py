@@ -3,7 +3,19 @@ import glob
 from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction as _ChromaEF
+from langchain_core.embeddings import Embeddings as _Embeddings
+
+
+class _LocalEmbeddings(_Embeddings):
+    def __init__(self):
+        self._ef = _ChromaEF()
+
+    def embed_documents(self, texts):
+        return [[float(x) for x in v] for v in self._ef(texts)]
+
+    def embed_query(self, text):
+        return [float(x) for x in self._ef([text])[0]]
 from langchain_community.vectorstores import Chroma
 
 # Resolve path to .env in the same directory as this script
@@ -50,7 +62,7 @@ def main():
     print(f"Created {len(chunks)} text chunks. Generating local embeddings and storing in ChromaDB...")
 
     # Using free, local HuggingFace embeddings (no API key needed!)
-    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    embeddings = _LocalEmbeddings()
     
     # Create and persist the vector store
     vectorstore = Chroma.from_documents(

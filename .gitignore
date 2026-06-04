@@ -6,6 +6,7 @@ dist/
 wheels/
 *.egg-info
 frontend-react/node_modules
+.python_packages/
 # Virtual environments
 .venv
 
